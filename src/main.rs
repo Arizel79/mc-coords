@@ -4,38 +4,38 @@ use std::io::{self, BufRead, Write};
 use std::process;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum World {
+enum Dimension {
     Overworld,
     Nether,
 }
 
-impl World {
-    fn parse(s: &str) -> Option<World> {
+impl Dimension {
+    fn parse(s: &str) -> Option<Dimension> {
         match s.to_ascii_lowercase().as_str() {
-            "n" | "nether" => Some(World::Nether),
-            "o" | "ow" | "overworld" => Some(World::Overworld),
+            "n" | "nether" => Some(Dimension::Nether),
+            "o" | "ow" | "overworld" => Some(Dimension::Overworld),
             _ => None,
         }
     }
 
     fn name(self) -> &'static str {
         match self {
-            World::Overworld => "overworld",
-            World::Nether => "nether",
+            Dimension::Overworld => "overworld",
+            Dimension::Nether => "nether",
         }
     }
 
     fn display_name(self) -> &'static str {
         match self {
-            World::Overworld => "Overworld",
-            World::Nether => "Nether",
+            Dimension::Overworld => "Overworld",
+            Dimension::Nether => "Nether",
         }
     }
 
-    fn target(self) -> World {
+    fn target(self) -> Dimension {
         match self {
-            World::Overworld => World::Nether,
-            World::Nether => World::Overworld,
+            Dimension::Overworld => Dimension::Nether,
+            Dimension::Nether => Dimension::Overworld,
         }
     }
 }
@@ -83,14 +83,14 @@ impl Coords {
         }
     }
 
-    fn convert(self, from: World) -> Result<Coords, String> {
+    fn convert(self, from: Dimension) -> Result<Coords, String> {
         match from {
-            World::Overworld => Ok(Coords {
+            Dimension::Overworld => Ok(Coords {
                 x: self.x / 8,
                 y: self.y,
                 z: self.z / 8,
             }),
-            World::Nether => {
+            Dimension::Nether => {
                 let x = self
                     .x
                     .checked_mul(8)
@@ -118,7 +118,7 @@ impl Coords {
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 struct Item {
-    from: World,
+    from: Dimension,
     coords: Coords,
 }
 
@@ -178,15 +178,15 @@ impl McVersion {
         }
     }
 
-    fn y_range(self, dim: World) -> (i64, i64) {
+    fn y_range(self, dim: Dimension) -> (i64, i64) {
         match (self, dim) {
-            (McVersion::Old, World::Overworld) => (0, 255),
-            (McVersion::Old, World::Nether) => (0, 127),
+            (McVersion::Old, Dimension::Overworld) => (0, 255),
+            (McVersion::Old, Dimension::Nether) => (0, 127),
             (McVersion::New, _) => (-64, 319),
         }
     }
 
-    fn is_valid(self, dim: World, c: &Coords) -> bool {
+    fn is_valid(self, dim: Dimension, c: &Coords) -> bool {
         let xz = self.xz_limit();
         let (y_lo, y_hi) = self.y_range(dim);
         c.x.abs() <= xz && c.z.abs() <= xz && c.y.is_none_or(|y| y >= y_lo && y <= y_hi)
@@ -198,8 +198,8 @@ struct ConvertOpts {
     input: Option<String>,
     output: Option<String>,
     no_y: bool,
-    add_dimension_to_output: bool,
-    add_from_dimension: bool,
+    output_dimension: bool,
+    show_both: bool,
     output_format: OutputFormat,
     mc_version: McVersion,
     ignore_invalid_coords: bool,
@@ -210,45 +210,45 @@ struct ValidateOpts {
     input: Option<String>,
     output: Option<String>,
     mc_version: McVersion,
-    dimension: Option<World>,
+    dimension: Option<Dimension>,
 }
 
-fn parse_line(line: &str, default_world: Option<World>) -> Result<Item, String> {
+fn parse_line(line: &str, default_dim: Option<Dimension>) -> Result<Item, String> {
     let tokens: Vec<&str> = line.split_whitespace().collect();
     if tokens.is_empty() {
         return Err("empty line".into());
     }
 
-    if let Some(world) = World::parse(tokens[0]) {
+    if let Some(dim) = Dimension::parse(tokens[0]) {
         let rest = &tokens[1..];
         if rest.is_empty() {
             return Err("missing coordinates".into());
         }
         let coords = Coords::parse(rest)?;
-        Ok(Item { from: world, coords })
+        Ok(Item { from: dim, coords })
     } else {
-        match default_world {
-            Some(world) => {
+        match default_dim {
+            Some(dim) => {
                 let coords = Coords::parse(&tokens)?;
-                Ok(Item { from: world, coords })
+                Ok(Item { from: dim, coords })
             }
-            None => Err(format!("unknown world: {:?}", tokens[0])),
+            None => Err(format!("unknown dimension: {:?}", tokens[0])),
         }
     }
 }
 
-fn parse_validate_line(line: &str, default_dim: World) -> Result<(World, Coords), String> {
+fn parse_validate_line(line: &str, default_dim: Dimension) -> Result<(Dimension, Coords), String> {
     let tokens: Vec<&str> = line.split_whitespace().collect();
     if tokens.is_empty() {
         return Err("empty line".into());
     }
-    match World::parse(tokens[0]) {
+    match Dimension::parse(tokens[0]) {
         Some(dim) => Ok((dim, Coords::parse(&tokens[1..])?)),
         None => Ok((default_dim, Coords::parse(&tokens)?)),
     }
 }
 
-fn validity_reason(version: McVersion, dim: World, c: &Coords) -> Option<String> {
+fn validity_reason(version: McVersion, dim: Dimension, c: &Coords) -> Option<String> {
     let xz = version.xz_limit();
     if c.x.abs() > xz || c.z.abs() > xz {
         return Some(format!("X/Z out of range [-{xz}, {xz}]"));
@@ -280,7 +280,7 @@ fn render(item: &Item, opts: &ConvertOpts) -> Result<String, String> {
             .join(opts.output_format.sep())
     };
 
-    if opts.add_from_dimension {
+    if opts.show_both {
         Ok(format!(
             "{} {} -> {} {}",
             item.from.display_name(),
@@ -288,7 +288,7 @@ fn render(item: &Item, opts: &ConvertOpts) -> Result<String, String> {
             target.display_name(),
             parts(&to_coords)
         ))
-    } else if opts.add_dimension_to_output {
+    } else if opts.output_dimension {
         Ok(format!("{} {}", target.name(), parts(&to_coords)))
     } else {
         Ok(parts(&to_coords))
@@ -319,8 +319,8 @@ fn parse_convert_flags(args: &[String]) -> Result<(ConvertOpts, Vec<String>), St
         input: None,
         output: None,
         no_y: false,
-        add_dimension_to_output: false,
-        add_from_dimension: false,
+        output_dimension: false,
+        show_both: false,
         output_format: OutputFormat::Space,
         mc_version: McVersion::New,
         ignore_invalid_coords: false,
@@ -337,15 +337,15 @@ fn parse_convert_flags(args: &[String]) -> Result<(ConvertOpts, Vec<String>), St
             "-i" => opts.input = Some(it.next().ok_or("missing value for -i")?.clone()),
             "-o" => opts.output = Some(it.next().ok_or("missing value for -o")?.clone()),
             "--no-y" => opts.no_y = true,
-            "--add-dimension-to-output" => opts.add_dimension_to_output = true,
-            "--add-from-dimension" => opts.add_from_dimension = true,
+            "--output-dimension" => opts.output_dimension = true,
+            "--show-both" => opts.show_both = true,
             "--mc-version" => {
                 let version = it.next().ok_or("missing value for --mc-version")?;
                 opts.mc_version = McVersion::parse(version)?;
             }
             "--ignore-invalid-coords" => opts.ignore_invalid_coords = true,
-            "--output-format" => {
-                let fmt = it.next().ok_or("missing value for --output-format")?;
+            "-f" | "--format" => {
+                let fmt = it.next().ok_or("missing value for --format")?;
                 opts.output_format = OutputFormat::parse(fmt)?;
             }
             other => positional.push(other.to_string()),
@@ -381,7 +381,7 @@ fn parse_validate_flags(args: &[String]) -> Result<(ValidateOpts, Vec<String>), 
             "--dimension" => {
                 let name = it.next().ok_or("missing value for --dimension")?;
                 opts.dimension = Some(
-                    World::parse(name)
+                    Dimension::parse(name)
                         .ok_or(format!("invalid dimension: {name:?} (expected n/nether/o/ow/overworld)"))?,
                 );
             }
@@ -393,20 +393,20 @@ fn parse_validate_flags(args: &[String]) -> Result<(ValidateOpts, Vec<String>), 
     Ok((opts, positional))
 }
 
-fn split_world(positional: &[String]) -> Result<(Option<World>, Vec<String>), String> {
-    let mut world = None;
+fn split_dimension(positional: &[String]) -> Result<(Option<Dimension>, Vec<String>), String> {
+    let mut dim = None;
     let mut coords = Vec::new();
     for token in positional {
-        if let Some(w) = World::parse(token) {
-            if world.is_some() {
-                return Err(format!("unexpected world: {token:?}"));
+        if let Some(w) = Dimension::parse(token) {
+            if dim.is_some() {
+                return Err(format!("unexpected dimension: {token:?}"));
             }
-            world = Some(w);
+            dim = Some(w);
         } else {
             coords.push(token.clone());
         }
     }
-    Ok((world, coords))
+    Ok((dim, coords))
 }
 
 fn read_lines(source: &Option<String>) -> Result<Vec<String>, String> {
@@ -450,13 +450,13 @@ fn write_stdout(content: &str) -> Result<(), String> {
 
 fn run_convert(args: &[String]) -> Result<(), String> {
     let (opts, positional) = parse_convert_flags(args)?;
-    let (world, coord_tokens) = split_world(&positional)?;
+    let (dim, coord_tokens) = split_dimension(&positional)?;
 
     let items: Vec<Item> = if !coord_tokens.is_empty() {
-        let world = world.ok_or("missing source world (use n/nether/o/ow/overworld)")?;
+        let dim = dim.ok_or("missing dimension (use n/nether/o/ow/overworld)")?;
         let refs: Vec<&str> = coord_tokens.iter().map(String::as_str).collect();
         let coords = Coords::parse(&refs)?;
-        vec![Item { from: world, coords }]
+        vec![Item { from: dim, coords }]
     } else {
         let lines = read_lines(&opts.input)?;
         let mut items = Vec::new();
@@ -464,7 +464,7 @@ fn run_convert(args: &[String]) -> Result<(), String> {
             if line.trim().is_empty() {
                 continue;
             }
-            items.push(parse_line(&line, world)?);
+            items.push(parse_line(&line, dim)?);
         }
         if items.is_empty() {
             return Err("no input".into());
@@ -484,7 +484,7 @@ fn run_convert(args: &[String]) -> Result<(), String> {
 
 fn run_validate(args: &[String]) -> Result<(), String> {
     let (opts, positional) = parse_validate_flags(args)?;
-    let (pos_dim, coord_tokens) = split_world(&positional)?;
+    let (pos_dim, coord_tokens) = split_dimension(&positional)?;
 
     let default_dim = match (opts.dimension, pos_dim) {
         (Some(flag), Some(pos)) if flag != pos => Err(format!(
@@ -493,10 +493,10 @@ fn run_validate(args: &[String]) -> Result<(), String> {
             pos.name()
         ))?,
         (Some(flag), _) => flag,
-        (None, pos) => pos.unwrap_or(World::Overworld),
+        (None, pos) => pos.unwrap_or(Dimension::Overworld),
     };
 
-    let coords_list: Vec<(World, Coords)> = if !coord_tokens.is_empty() {
+    let coords_list: Vec<(Dimension, Coords)> = if !coord_tokens.is_empty() {
         let refs: Vec<&str> = coord_tokens.iter().map(String::as_str).collect();
         vec![(default_dim, Coords::parse(&refs)?)]
     } else {
@@ -576,28 +576,28 @@ fn print_convert_usage() {
 }
 
 fn print_convert_usage_to(w: &mut dyn Write) {
-    writeln!(w, "usage: mccoords convert [OPTIONS] [WORLD] [X [Y] Z]").unwrap();
+    writeln!(w, "usage: mccoords convert [OPTIONS] [DIMENSION] [X [Y] Z]").unwrap();
     writeln!(w).unwrap();
     writeln!(w, "converts Minecraft coordinates between the overworld and the nether").unwrap();
     writeln!(w, "  overworld -> nether:  X/8, Z/8   nether -> overworld:  X*8, Z*8   (Y is kept)").unwrap();
     writeln!(w).unwrap();
-    writeln!(w, "WORLD aliases: n, nether, o, ow, overworld (case-insensitive)").unwrap();
+    writeln!(w, "DIMENSION aliases: n, nether, o, ow, overworld (case-insensitive)").unwrap();
     writeln!(w, "coordinates: 'X Y Z', 'X Z', 'X,Y,Z', 'X,Z' (2 numbers = X Z)").unwrap();
-    writeln!(w, "input format is auto-detected; --output-format affects output only").unwrap();
+    writeln!(w, "input format is auto-detected; --format affects output only").unwrap();
     writeln!(w, "coordinates are validated against the world limits of --mc-version (default: new);").unwrap();
     writeln!(w, "invalid coordinates make convert exit with an error").unwrap();
     writeln!(w, "  --ignore-invalid-coords converts them anyway, without errors").unwrap();
     writeln!(w).unwrap();
     writeln!(w, "without coordinates in the arguments, lines are read from stdin (-i):").unwrap();
-    writeln!(w, "  each line: [WORLD] coordinates   (WORLD needed unless given as an argument)").unwrap();
+    writeln!(w, "  each line: [DIMENSION] coordinates   (DIMENSION needed unless given as an argument)").unwrap();
     writeln!(w).unwrap();
     writeln!(w, "options:").unwrap();
     writeln!(w, "  -i PATH                        read input from PATH ('-' means stdin, default)").unwrap();
     writeln!(w, "  -o PATH                        write output to PATH ('-' means stdout, default)").unwrap();
     writeln!(w, "  --no-y                         omit Y from the output").unwrap();
-    writeln!(w, "  --add-dimension-to-output      prefix output with the target world name").unwrap();
-    writeln!(w, "  --add-from-dimension           print: FROM coords -> TO coords with world names").unwrap();
-    writeln!(w, "  --output-format FORMAT         space-sep (default) or comma-sep").unwrap();
+    writeln!(w, "  --output-dimension           prefix output with the target dimension name").unwrap();
+    writeln!(w, "  --show-both                  print: FROM coords -> TO coords with dimension names").unwrap();
+    writeln!(w, "  -f, --format FORMAT           output format: space-sep (default) or comma-sep").unwrap();
     writeln!(w, "  --mc-version old|new           MC version for coordinate limits (default: new)").unwrap();
     writeln!(w, "  --ignore-invalid-coords       convert out-of-bounds coordinates anyway").unwrap();
     writeln!(w, "  -h, --help                     show this help").unwrap();
@@ -642,8 +642,8 @@ mod tests {
             input: None,
             output: None,
             no_y: false,
-            add_dimension_to_output: false,
-            add_from_dimension: false,
+            output_dimension: false,
+            show_both: false,
             output_format: OutputFormat::Space,
             mc_version: McVersion::New,
             ignore_invalid_coords: false,
@@ -658,7 +658,7 @@ mod tests {
             z: 200,
         };
         assert_eq!(
-            c.convert(World::Nether).unwrap(),
+            c.convert(Dimension::Nether).unwrap(),
             Coords {
                 x: 800,
                 y: Some(64),
@@ -675,7 +675,7 @@ mod tests {
             z: 1600,
         };
         assert_eq!(
-            c.convert(World::Overworld).unwrap(),
+            c.convert(Dimension::Overworld).unwrap(),
             Coords {
                 x: 100,
                 y: Some(64),
@@ -692,7 +692,7 @@ mod tests {
                 y: None,
                 z: 200,
             }
-            .convert(World::Overworld)
+            .convert(Dimension::Overworld)
             .unwrap(),
             Coords {
                 x: 12,
@@ -706,7 +706,7 @@ mod tests {
                 y: None,
                 z: -200,
             }
-            .convert(World::Overworld)
+            .convert(Dimension::Overworld)
             .unwrap(),
             Coords {
                 x: -12,
@@ -717,14 +717,14 @@ mod tests {
     }
 
     #[test]
-    fn world_aliases() {
-        assert_eq!(World::parse("n"), Some(World::Nether));
-        assert_eq!(World::parse("nether"), Some(World::Nether));
-        assert_eq!(World::parse("NETHER"), Some(World::Nether));
-        assert_eq!(World::parse("o"), Some(World::Overworld));
-        assert_eq!(World::parse("ow"), Some(World::Overworld));
-        assert_eq!(World::parse("Overworld"), Some(World::Overworld));
-        assert_eq!(World::parse("x"), None);
+    fn dimension_aliases() {
+        assert_eq!(Dimension::parse("n"), Some(Dimension::Nether));
+        assert_eq!(Dimension::parse("nether"), Some(Dimension::Nether));
+        assert_eq!(Dimension::parse("NETHER"), Some(Dimension::Nether));
+        assert_eq!(Dimension::parse("o"), Some(Dimension::Overworld));
+        assert_eq!(Dimension::parse("ow"), Some(Dimension::Overworld));
+        assert_eq!(Dimension::parse("Overworld"), Some(Dimension::Overworld));
+        assert_eq!(Dimension::parse("x"), None);
     }
 
     #[test]
@@ -775,9 +775,9 @@ mod tests {
     }
 
     #[test]
-    fn parse_line_with_world() {
+    fn parse_line_with_dimension() {
         let item = parse_line("nether 100 64 200", None).unwrap();
-        assert_eq!(item.from, World::Nether);
+        assert_eq!(item.from, Dimension::Nether);
         assert_eq!(
             item.coords,
             Coords {
@@ -789,9 +789,9 @@ mod tests {
     }
 
     #[test]
-    fn parse_line_default_world() {
-        let item = parse_line("800,800", Some(World::Overworld)).unwrap();
-        assert_eq!(item.from, World::Overworld);
+    fn parse_line_default_dimension() {
+        let item = parse_line("800,800", Some(Dimension::Overworld)).unwrap();
+        assert_eq!(item.from, Dimension::Overworld);
         assert_eq!(
             item.coords,
             Coords {
@@ -805,7 +805,7 @@ mod tests {
     #[test]
     fn render_default() {
         let item = Item {
-            from: World::Nether,
+            from: Dimension::Nether,
             coords: Coords {
                 x: 100,
                 y: Some(64),
@@ -818,7 +818,7 @@ mod tests {
     #[test]
     fn render_no_y() {
         let item = Item {
-            from: World::Nether,
+            from: Dimension::Nether,
             coords: Coords {
                 x: 100,
                 y: Some(64),
@@ -831,9 +831,9 @@ mod tests {
     }
 
     #[test]
-    fn render_add_dimension_to_output() {
+    fn render_output_dimension() {
         let item = Item {
-            from: World::Overworld,
+            from: Dimension::Overworld,
             coords: Coords {
                 x: 800,
                 y: None,
@@ -841,14 +841,14 @@ mod tests {
             },
         };
         let mut o = convert_opts();
-        o.add_dimension_to_output = true;
+        o.output_dimension = true;
         assert_eq!(render(&item, &o).unwrap(), "nether 100 100");
     }
 
     #[test]
-    fn render_add_from_dimension() {
+    fn render_show_both() {
         let item = Item {
-            from: World::Overworld,
+            from: Dimension::Overworld,
             coords: Coords {
                 x: 800,
                 y: Some(64),
@@ -856,7 +856,7 @@ mod tests {
             },
         };
         let mut o = convert_opts();
-        o.add_from_dimension = true;
+        o.show_both = true;
         assert_eq!(
             render(&item, &o).unwrap(),
             "Overworld 800 64 800 -> Nether 100 64 100"
@@ -866,7 +866,7 @@ mod tests {
     #[test]
     fn render_comma_sep() {
         let item = Item {
-            from: World::Overworld,
+            from: Dimension::Overworld,
             coords: Coords {
                 x: 800,
                 y: Some(64),
@@ -892,7 +892,7 @@ mod tests {
     fn convert_valid_coords() {
         let opts = convert_opts();
         let items = vec![Item {
-            from: World::Nether,
+            from: Dimension::Nether,
             coords: Coords {
                 x: 100,
                 y: Some(64),
@@ -912,7 +912,7 @@ mod tests {
             ..convert_opts()
         };
         let items = vec![Item {
-            from: World::Nether,
+            from: Dimension::Nether,
             coords: Coords {
                 x: 0,
                 y: Some(128),
@@ -927,7 +927,7 @@ mod tests {
     fn convert_invalid_out_of_bounds_x_errors() {
         let opts = convert_opts();
         let items = vec![Item {
-            from: World::Overworld,
+            from: Dimension::Overworld,
             coords: Coords {
                 x: 30_000_000,
                 y: None,
@@ -945,7 +945,7 @@ mod tests {
             ..convert_opts()
         };
         let items = vec![Item {
-            from: World::Nether,
+            from: Dimension::Nether,
             coords: Coords {
                 x: 0,
                 y: Some(128),
@@ -962,7 +962,7 @@ mod tests {
             y: None,
             z: 0,
         };
-        assert!(c.convert(World::Nether).is_err());
+        assert!(c.convert(Dimension::Nether).is_err());
     }
 
     #[test]
@@ -976,43 +976,43 @@ mod tests {
     fn validate_new_limits() {
         let v = McVersion::New;
         let c = |x: i64, y: i64, z: i64| Coords { x, y: Some(y), z };
-        assert!(v.is_valid(World::Overworld, &c(29_999_984, 64, 29_999_984)));
-        assert!(!v.is_valid(World::Overworld, &c(30_000_000, 64, 0)));
-        assert!(!v.is_valid(World::Overworld, &c(0, -65, 0)));
-        assert!(v.is_valid(World::Overworld, &c(0, -64, 0)));
-        assert!(!v.is_valid(World::Overworld, &c(0, 320, 0)));
-        assert!(v.is_valid(World::Overworld, &c(0, 319, 0)));
+        assert!(v.is_valid(Dimension::Overworld, &c(29_999_984, 64, 29_999_984)));
+        assert!(!v.is_valid(Dimension::Overworld, &c(30_000_000, 64, 0)));
+        assert!(!v.is_valid(Dimension::Overworld, &c(0, -65, 0)));
+        assert!(v.is_valid(Dimension::Overworld, &c(0, -64, 0)));
+        assert!(!v.is_valid(Dimension::Overworld, &c(0, 320, 0)));
+        assert!(v.is_valid(Dimension::Overworld, &c(0, 319, 0)));
     }
 
     #[test]
     fn validate_old_limits() {
         let v = McVersion::Old;
         let c = |x: i64, y: i64, z: i64| Coords { x, y: Some(y), z };
-        assert!(v.is_valid(World::Overworld, &c(30_000_000, 255, 30_000_000)));
-        assert!(!v.is_valid(World::Overworld, &c(30_000_001, 0, 0)));
-        assert!(!v.is_valid(World::Overworld, &c(0, -1, 0)));
-        assert!(v.is_valid(World::Overworld, &c(0, 0, 0)));
-        assert!(!v.is_valid(World::Overworld, &c(0, 256, 0)));
+        assert!(v.is_valid(Dimension::Overworld, &c(30_000_000, 255, 30_000_000)));
+        assert!(!v.is_valid(Dimension::Overworld, &c(30_000_001, 0, 0)));
+        assert!(!v.is_valid(Dimension::Overworld, &c(0, -1, 0)));
+        assert!(v.is_valid(Dimension::Overworld, &c(0, 0, 0)));
+        assert!(!v.is_valid(Dimension::Overworld, &c(0, 256, 0)));
     }
 
     #[test]
     fn validate_old_nether_y_ceiling() {
         let v = McVersion::Old;
         let c = |y: i64| Coords { x: 0, y: Some(y), z: 0 };
-        assert!(v.is_valid(World::Nether, &c(0)));
-        assert!(v.is_valid(World::Nether, &c(127)));
-        assert!(!v.is_valid(World::Nether, &c(128)));
-        assert!(!v.is_valid(World::Nether, &c(-1)));
+        assert!(v.is_valid(Dimension::Nether, &c(0)));
+        assert!(v.is_valid(Dimension::Nether, &c(127)));
+        assert!(!v.is_valid(Dimension::Nether, &c(128)));
+        assert!(!v.is_valid(Dimension::Nether, &c(-1)));
     }
 
     #[test]
     fn validate_without_y() {
-        assert!(McVersion::New.is_valid(World::Overworld, &Coords {
+        assert!(McVersion::New.is_valid(Dimension::Overworld, &Coords {
             x: 0,
             y: None,
             z: 29_999_984
         }));
-        assert!(!McVersion::New.is_valid(World::Overworld, &Coords {
+        assert!(!McVersion::New.is_valid(Dimension::Overworld, &Coords {
             x: 29_999_985,
             y: None,
             z: 0
@@ -1021,8 +1021,8 @@ mod tests {
 
     #[test]
     fn parse_validate_line_with_dimension() {
-        let (dim, coords) = parse_validate_line("nether 0 128 0", World::Overworld).unwrap();
-        assert_eq!(dim, World::Nether);
+        let (dim, coords) = parse_validate_line("nether 0 128 0", Dimension::Overworld).unwrap();
+        assert_eq!(dim, Dimension::Nether);
         assert_eq!(
             coords,
             Coords {
@@ -1035,8 +1035,8 @@ mod tests {
 
     #[test]
     fn parse_validate_line_default_dimension() {
-        let (dim, coords) = parse_validate_line("800 800", World::Nether).unwrap();
-        assert_eq!(dim, World::Nether);
+        let (dim, coords) = parse_validate_line("800 800", Dimension::Nether).unwrap();
+        assert_eq!(dim, Dimension::Nether);
         assert_eq!(
             coords,
             Coords {
