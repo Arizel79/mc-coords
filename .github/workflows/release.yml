@@ -1,0 +1,35 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact: mccoords-linux-x86_64
+            asset: target/release/mccoords
+          - os: windows-latest
+            artifact: mccoords-windows-x86_64
+            asset: target/release/mccoords.exe
+          - os: macos-latest
+            artifact: mccoords-macos
+            asset: target/release/mccoords
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build release binary
+        run: cargo build --release
+      - name: Upload to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ matrix.asset }}
+          fail_on_unmatched_files: true
+          make_latest: true
